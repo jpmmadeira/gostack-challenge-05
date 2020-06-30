@@ -28,47 +28,50 @@ class ImportTransactionsService {
     const parseCSV = readCSVStream.pipe(parseStream);
 
     const transactions: CSVTransactionDTO[] = [];
+    const categories: string[] = [];
 
     parseCSV.on('data', async line => {
       const [title, type, value, category] = line.map((cell: string) =>
         cell.trim(),
       );
 
+      if (!title || !type || !value) return;
+
+      categories.push(category);
+
       transactions.push({ title, type, value, category });
     });
 
     await new Promise(resolve => parseCSV.on('end', resolve));
 
-    const categories: string[] = [];
-
-    transactions.map(async transaction => {
-      const { category } = transaction;
-
-      categories.push(category);
-
-      let transactionCategory = await categoriesRepository.findOne({
-        where: { title: category },
-      });
-
-      if (!transactionCategory) {
-        transactionCategory = categoriesRepository.create({
-          title: category,
-        });
-
-        await categoriesRepository.save(transactionCategory);
-      }
+    const categoriesAlreadyCreated = await categoriesRepository.find({
+      where: {
+        title: In(categories),
+      },
     });
 
-    const allCategories = await categoriesRepository.find({
-      where: { title: In(categories) },
-    });
+    const categoriesAlreadyCreatedTitles = categoriesAlreadyCreated.map(
+      category => category.title,
+    );
+
+    const addCategoryTitles = categories
+      .filter(category => !categoriesAlreadyCreatedTitles.includes(category))
+      .filter((value, index, self) => self.indexOf(value) === index);
+
+    const newCategories = categoriesRepository.create(
+      addCategoryTitles.map(title => ({
+        title,
+      })),
+    );
+
+    await categoriesRepository.save(newCategories);
 
     const createdTransactions = transactionsRepository.create(
       transactions.map(transaction => ({
         title: transaction.title,
         type: transaction.type,
         value: transaction.value,
-        category: allCategories.find(
+        category: newCategories.find(
           category => category.title === transaction.category,
         ),
       })),
